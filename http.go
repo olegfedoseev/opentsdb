@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,40 +17,49 @@ var (
 	}
 )
 
-func (client *Client) send(batch DataPoints) error {
-	resp, err := makeHttpRequest(batch, client.url)
+// Send make actual http request to send datapoint to OpenTSDB, and validates,
+// that all went ok. If something is wrong it will requeue all data back to
+// internal queue and return error
+func (client *Client) Send(batch DataPoints) {
+	resp, err := makeHTTPRequest(batch, client.url)
 	if err == nil {
-		client.Lock()
-		client.Sent += int64(len(batch))
-		client.Unlock()
-		defer resp.Body.Close()
+		atomic.AddInt64(&client.Sent, int64(len(batch)))
+
+		defer func() {
+			// Callers should close resp.Body when done reading from it.
+			if err := resp.Body.Close(); err != nil {
+				client.Errors <- fmt.Errorf("failed to close resp.Body: %v", err)
+			}
+		}()
 	}
 
-	// Some problem with connecting to the server; retry later.
-	if err != nil || resp.StatusCode != http.StatusNoContent {
-		// requeue messages for retry
-		for _, msg := range batch {
-			if err := client.Push(msg); err != nil {
-				break
-			}
+	// requeue messages for retry
+	for idx, msg := range batch {
+		if err := client.Push(msg); err != nil {
+			client.Errors <- fmt.Errorf("failed to requeue all datapoint %v/%v: %v",
+				idx, len(batch), err)
+			break
 		}
+	}
 
+	if err != nil {
+		client.Errors <- fmt.Errorf("http request to tsdb failed: %v", err)
+		return
+	}
+
+	if resp.StatusCode != http.StatusNoContent {
+		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("http request to tsdb failed: %v", err)
-		} else if resp.StatusCode != http.StatusNoContent {
-			body, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				return fmt.Errorf("failed to read http response from tsdb: %v", err)
-			}
-			return fmt.Errorf("http request to tsdb failed, status %q, body %q",
-				resp.Status, string(body))
+			client.Errors <- fmt.Errorf("failed to read http response from tsdb: %v", err)
+			return
 		}
+		client.Errors <- fmt.Errorf(
+			"http request to tsdb failed, status %q, body %q",
+			resp.Status, string(body))
 	}
-
-	return nil
 }
 
-func makeHttpRequest(dps DataPoints, tsdbURL string) (*http.Response, error) {
+func makeHTTPRequest(dps DataPoints, tsdbURL string) (*http.Response, error) {
 	var buf bytes.Buffer
 	g := gzip.NewWriter(&buf)
 	if err := json.NewEncoder(g).Encode(dps); err != nil {

@@ -1,6 +1,8 @@
 package opentsdb
 
 import (
+	"bytes"
+	"sort"
 	"unicode"
 	"unicode/utf8"
 )
@@ -22,8 +24,33 @@ type DataPoints []*DataPoint
 type Tags map[string]string
 
 // Set add new tag to Tags, and cleans it
-func (t Tags) Set(key, value string) {
-	t[MustReplace(key, "_")] = MustReplace(value, "_")
+func (tags Tags) Set(key, value string) {
+	key = MustReplace(key, "_")
+	value = MustReplace(value, "_")
+	if key != "" && value != "" {
+		tags[key] = value
+	}
+}
+
+// String converts t to an OpenTSDB-style {a=b,c=b} string, alphabetized by key.
+func (tags Tags) String() string {
+	var keys []string
+	for key := range tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	buf := bytes.NewBufferString("{")
+	for i, key := range keys {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(key)
+		buf.WriteString("=")
+		buf.WriteString(tags[key])
+	}
+	buf.WriteString("}")
+	return buf.String()
 }
 
 // MustReplace replace invalid, for OpenTSDB, characters from s and replace it
