@@ -7,56 +7,36 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"sync/atomic"
 	"time"
 )
 
 var (
 	httpClient = &http.Client{
 		Timeout: time.Second * 5,
+		Transport: &http.Transport{
+			MaxIdleConnsPerHost: 100,
+		},
 	}
 )
 
-// Send make actual http request to send datapoint to OpenTSDB, and validates,
-// that all went ok. If something is wrong it will requeue all data back to
-// internal queue and return error
-func (client *Client) Send(batch DataPoints) {
-	resp, err := makeHTTPRequest(batch, client.url)
+func SendDataPonts(batch DataPoints, url string) (err error) {
+	resp, err := makeHTTPRequest(batch, url)
 	if err == nil {
-		atomic.AddInt64(&client.Sent, int64(len(batch)))
-
-		defer func() {
-			// Callers should close resp.Body when done reading from it.
-			if err := resp.Body.Close(); err != nil {
-				client.Errors <- fmt.Errorf("failed to close resp.Body: %v", err)
-			}
-		}()
-	}
-
-	// requeue messages for retry
-	for idx, msg := range batch {
-		if err := client.Push(msg); err != nil {
-			client.Errors <- fmt.Errorf("failed to requeue all datapoint %v/%v: %v",
-				idx, len(batch), err)
-			break
-		}
+		// Callers should close resp.Body when done reading from it.
+		defer resp.Body.Close()
 	}
 
 	if err != nil {
-		client.Errors <- fmt.Errorf("http request to tsdb failed: %v", err)
-		return
+		return fmt.Errorf("request failed: %v", err)
 	}
-
 	if resp.StatusCode != http.StatusNoContent {
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			client.Errors <- fmt.Errorf("failed to read http response from tsdb: %v", err)
-			return
+			return fmt.Errorf("failed to read tsdb response: %v", err)
 		}
-		client.Errors <- fmt.Errorf(
-			"http request to tsdb failed, status %q, body %q",
-			resp.Status, string(body))
+		return fmt.Errorf("unexpected status %d (%q)", resp.StatusCode, string(body))
 	}
+	return nil
 }
 
 func makeHTTPRequest(dps DataPoints, tsdbURL string) (*http.Response, error) {

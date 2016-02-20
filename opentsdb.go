@@ -20,7 +20,7 @@ type Client struct {
 	// If this number more than zero, than you should increase bufferSize
 	Dropped int64
 
-	// Sent is number of sent metrics by all workers from begining of time
+	// Sent is number of sent metrics by all workers from beginning of time
 	Sent int64
 }
 
@@ -66,6 +66,25 @@ func (client *Client) Push(dp *DataPoint) error {
 	return nil
 }
 
+// Send make actual http request to send datapoint to OpenTSDB, and validates,
+// that all went ok. If something is wrong it will requeue all data back to
+// internal queue and return error
+func (client *Client) Send(batch DataPoints) error {
+	if err := SendDataPonts(batch, client.url); err != nil {
+		// requeue messages for retry
+		requeued := 0
+		for _, msg := range batch {
+			if err := client.Push(msg); err != nil {
+				break
+			}
+			requeued++
+		}
+		return fmt.Errorf("request failed: %v (requeued %v/%v)", err, requeued, len(batch))
+	}
+	atomic.AddInt64(&client.Sent, int64(len(batch)))
+	return nil
+}
+
 func (client *Client) worker() {
 	buffer := make(DataPoints, 0)
 	queue := make(chan DataPoints, 10)
@@ -83,7 +102,10 @@ func (client *Client) worker() {
 				buffer = make(DataPoints, 0)
 			}
 		case dps := <-queue:
-			go client.Send(dps)
+			t := time.Now()
+			if err := client.Send(dps); err != nil {
+				client.Errors <- err
+			}
 		}
 	}
 }
