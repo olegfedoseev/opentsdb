@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -24,7 +25,7 @@ func TestClientSend(t *testing.T) {
 	defer ts.Close()
 	host := strings.Replace(ts.URL, "http://", "", 1)
 
-	client, err := NewClient(host, 1)
+	client, err := NewClient(host, 1, 5*time.Second)
 	assert.NoError(t, err)
 
 	dps := DataPoints{
@@ -45,7 +46,7 @@ func TestClientSendWithErrorAndFailedToRequeue(t *testing.T) {
 	defer ts.Close()
 	host := strings.Replace(ts.URL, "http://", "", 1)
 
-	client, err := NewClient(host, 1)
+	client, err := NewClient(host, 1, 5*time.Second)
 	assert.NoError(t, err)
 
 	dps := DataPoints{
@@ -67,7 +68,7 @@ func TestClientSendWithErrorAndAllRequeued(t *testing.T) {
 	defer ts.Close()
 	host := strings.Replace(ts.URL, "http://", "", 1)
 
-	client, err := NewClient(host, 2)
+	client, err := NewClient(host, 2, 5*time.Second)
 	assert.NoError(t, err)
 
 	dps := DataPoints{

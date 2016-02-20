@@ -10,7 +10,6 @@ import (
 
 // A Client is an OpenTSDB client. It should be created with NewClient.
 type Client struct {
-	url   string
 	Queue chan *DataPoint
 
 	// Errors is channel for errors from workers, client should drain it
@@ -22,12 +21,15 @@ type Client struct {
 
 	// Sent is number of sent metrics by all workers from beginning of time
 	Sent int64
+
+	url     string
+	postman *Postman
 }
 
 // NewClient will create you a new client for OpenTSDB
 // host could be ip address or hostname and may contain port
 // bufferSize if size of internal Queue for workers
-func NewClient(host string, bufferSize int) (*Client, error) {
+func NewClient(host string, bufferSize int, timeout time.Duration) (*Client, error) {
 	if _, err := net.ResolveTCPAddr("tcp4", host); err != nil {
 		return nil, fmt.Errorf("failer to resolve tsdb host %q: %v", host, err)
 	}
@@ -39,9 +41,10 @@ func NewClient(host string, bufferSize int) (*Client, error) {
 	}
 
 	c := &Client{
-		url:    tsdbURL.String(),
-		Queue:  make(chan *DataPoint, bufferSize),
-		Errors: make(chan error, 10),
+		url:     tsdbURL.String(),
+		Queue:   make(chan *DataPoint, bufferSize),
+		Errors:  make(chan error, 10),
+		postman: NewPostman(timeout),
 	}
 	return c, nil
 }
@@ -70,7 +73,7 @@ func (client *Client) Push(dp *DataPoint) error {
 // that all went ok. If something is wrong it will requeue all data back to
 // internal queue and return error
 func (client *Client) Send(batch DataPoints) error {
-	if err := SendDataPonts(batch, client.url); err != nil {
+	if err := client.postman.Post(batch, client.url); err != nil {
 		// requeue messages for retry
 		requeued := 0
 		for _, msg := range batch {
@@ -102,7 +105,6 @@ func (client *Client) worker() {
 				buffer = make(DataPoints, 0)
 			}
 		case dps := <-queue:
-			t := time.Now()
 			if err := client.Send(dps); err != nil {
 				client.Errors <- err
 			}

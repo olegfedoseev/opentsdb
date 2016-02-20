@@ -2,13 +2,12 @@ package opentsdb
 
 import (
 	"compress/gzip"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -30,54 +29,11 @@ func TestSendDatapoints(t *testing.T) {
 		&DataPoint{"test1", 123, 1, Tags{"key_z": "val1", "key_a": "val2"}},
 		&DataPoint{"test2", 234, 2, Tags{"type": "test"}},
 	}
-	assert.NoError(t, SendDataPonts(dps, ts.URL))
+	postman := NewPostman(5 * time.Second)
+	assert.NoError(t, postman.Post(dps, ts.URL))
 }
 
-func TestSendDatapointsWithErrorAndFailedToRequeue(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, "Nothing here, move along")
-	}))
-	defer ts.Close()
-	host := strings.Replace(ts.URL, "http://", "", 1)
-
-	client, err := NewClient(host, 1)
-	assert.NoError(t, err)
-
-	dps := DataPoints{
-		&DataPoint{"test1", 123, 1, Tags{"key_z": "val1", "key_a": "val2"}},
-		&DataPoint{"test2", 234, 2, Tags{"type": "test"}},
-	}
-	err = client.Send(dps)
-	assert.Error(t, err)
-
-	expected := "request failed: unexpected status 404 (\"Nothing here, move along\") (requeued 1/2)"
-	assert.EqualError(t, err, expected)
-}
-
-func TestSendDatapointsWithError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, "Nothing here, move along")
-	}))
-	defer ts.Close()
-	host := strings.Replace(ts.URL, "http://", "", 1)
-
-	client, err := NewClient(host, 2)
-	assert.NoError(t, err)
-
-	dps := DataPoints{
-		&DataPoint{"test1", 123, 1, Tags{"key_z": "val1", "key_a": "val2"}},
-		&DataPoint{"test2", 234, 2, Tags{"type": "test"}},
-	}
-	err = client.Send(dps)
-	assert.Error(t, err)
-
-	expected := `request failed: unexpected status 404 ("Nothing here, move along") (requeued 2/2)`
-	assert.EqualError(t, err, expected)
-}
-
-func BenchmarkSend(b *testing.B) {
+func BenchmarkPost(b *testing.B) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -97,8 +53,9 @@ func BenchmarkSend(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	postman := NewPostman(5 * time.Second)
 	for i := 0; i < b.N; i++ {
-		_ = SendDataPonts(dps, ts.URL)
+		_ = postman.Post(dps, ts.URL)
 	}
 }
 
