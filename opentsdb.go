@@ -22,8 +22,7 @@ type Client struct {
 	// Sent is number of sent metrics by all workers from beginning of time
 	Sent int64
 
-	url     string
-	postman *Postman
+	url string
 }
 
 // NewClient will create you a new client for OpenTSDB
@@ -41,10 +40,9 @@ func NewClient(host string, bufferSize int, timeout time.Duration) (*Client, err
 	}
 
 	c := &Client{
-		url:     tsdbURL.String(),
-		Queue:   make(chan *DataPoint, bufferSize),
-		Errors:  make(chan error, 10),
-		postman: NewPostman(timeout),
+		url:    tsdbURL.String(),
+		Queue:  make(chan *DataPoint, bufferSize),
+		Errors: make(chan error, 10),
 	}
 	return c, nil
 }
@@ -72,8 +70,8 @@ func (client *Client) Push(dp *DataPoint) error {
 // Send make actual http request to send datapoint to OpenTSDB, and validates,
 // that all went ok. If something is wrong it will requeue all data back to
 // internal queue and return error
-func (client *Client) Send(batch DataPoints) error {
-	if err := client.postman.Post(batch, client.url); err != nil {
+func (client *Client) Send(postman *Postman, batch DataPoints) error {
+	if err := postman.Post(batch, client.url); err != nil {
 		// requeue messages for retry
 		requeued := 0
 		for _, msg := range batch {
@@ -91,6 +89,8 @@ func (client *Client) Send(batch DataPoints) error {
 func (client *Client) worker(batchSize int, timeout time.Duration) {
 	buffer := make(DataPoints, 0)
 	queue := make(chan DataPoints, 10)
+	postman := NewPostman(timeout)
+
 	for {
 		select {
 		case <-time.After(timeout):
@@ -105,7 +105,7 @@ func (client *Client) worker(batchSize int, timeout time.Duration) {
 				buffer = make(DataPoints, 0)
 			}
 		case dps := <-queue:
-			if err := client.Send(dps); err != nil {
+			if err := client.Send(postman, dps); err != nil {
 				client.Errors <- err
 			}
 		}

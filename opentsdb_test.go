@@ -27,7 +27,8 @@ func TestClientSend(t *testing.T) {
 	client, err := NewClient(host, 1, 5*time.Second)
 	assert.NoError(t, err)
 
-	err = client.Send(dps)
+	postman := NewPostman(time.Second)
+	err = client.Send(postman, dps)
 	assert.NoError(t, err)
 	assert.EqualValues(t, 2, client.Sent)
 	assert.EqualValues(t, 0, client.Dropped)
@@ -48,7 +49,8 @@ func TestClientSendWithErrorAndFailedToRequeue(t *testing.T) {
 	client, err := NewClient(host, bufferSize, 5*time.Second)
 	assert.NoError(t, err)
 
-	err = client.Send(dps)
+	postman := NewPostman(time.Second)
+	err = client.Send(postman, dps)
 	assert.Error(t, err)
 
 	expected := "request failed: unexpected status 404 (\"Nothing here, move along\") (requeued 1/2)"
@@ -63,7 +65,8 @@ func TestClientSendWithErrorAndAllRequeued(t *testing.T) {
 	client, err := NewClient(host, bufferSize, 5*time.Second)
 	assert.NoError(t, err)
 
-	err = client.Send(dps)
+	postman := NewPostman(time.Second)
+	err = client.Send(postman, dps)
 	assert.Error(t, err)
 
 	expected := `request failed: unexpected status 404 ("Nothing here, move along") (requeued 2/2)`
