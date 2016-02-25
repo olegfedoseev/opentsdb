@@ -151,13 +151,6 @@ func runBenchmark(b *testing.B, workers, batchSize int) {
 	var metricsRecived int64
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// body, err := gzipBodyReader(r.Body)
-		// assert.NoError(t, err)
-
-		// // Count how many metrics we got
-		// data := []interface{}{}
-		// err = json.Unmarshal([]byte(body), &data)
-		// assert.NoError(t, err)
 		time.Sleep(10 * time.Millisecond)
 
 		atomic.AddInt64(&metricsRecived, 1)

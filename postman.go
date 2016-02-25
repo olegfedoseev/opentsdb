@@ -31,6 +31,8 @@ func NewPostman(timeout time.Duration) *Postman {
 	return postman
 }
 
+// Post will make POST request to OpenTSDB at given url and verify response
+// If something goes wrong, it will try to requeue all datapoints in batch
 func (postman *Postman) Post(batch DataPoints, url string) (err error) {
 	resp, err := postman.makeHTTPRequest(batch, url)
 	if err == nil {
