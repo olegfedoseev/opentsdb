@@ -51,9 +51,9 @@ func NewClient(host string, bufferSize int, timeout time.Duration) (*Client, err
 
 // StartWorkers will start given number of workers that will consume and process
 // metrics that you Push to client
-func (client *Client) StartWorkers(workers int) {
+func (client *Client) StartWorkers(workers, batchSize int, timeout time.Duration) {
 	for i := 0; i < workers; i++ {
-		go client.worker()
+		go client.worker(batchSize, timeout)
 	}
 }
 
@@ -88,19 +88,19 @@ func (client *Client) Send(batch DataPoints) error {
 	return nil
 }
 
-func (client *Client) worker() {
+func (client *Client) worker(batchSize int, timeout time.Duration) {
 	buffer := make(DataPoints, 0)
 	queue := make(chan DataPoints, 10)
 	for {
 		select {
-		case <-time.After(time.Second * 10):
+		case <-time.After(timeout):
 			if len(buffer) > 0 {
 				queue <- buffer
 				buffer = make(DataPoints, 0)
 			}
 		case dp := <-client.Queue:
 			buffer = append(buffer, dp)
-			if len(buffer) > 1000 {
+			if len(buffer) >= batchSize {
 				queue <- buffer
 				buffer = make(DataPoints, 0)
 			}
