@@ -32,7 +32,6 @@ func NewPostman(timeout time.Duration) *Postman {
 }
 
 // Post will make POST request to OpenTSDB at given url and verify response
-// If something goes wrong, it will try to requeue all datapoints in batch
 func (postman *Postman) Post(batch DataPoints, url string) (err error) {
 	resp, err := postman.makeHTTPRequest(batch, url)
 	if err == nil {
@@ -41,7 +40,7 @@ func (postman *Postman) Post(batch DataPoints, url string) (err error) {
 	}
 
 	if err != nil {
-		return fmt.Errorf("request failed: %v", err)
+		return err
 	}
 	if resp.StatusCode != http.StatusNoContent {
 		body, err := ioutil.ReadAll(resp.Body)
@@ -55,6 +54,7 @@ func (postman *Postman) Post(batch DataPoints, url string) (err error) {
 
 func (postman *Postman) makeHTTPRequest(dps DataPoints, tsdbURL string) (*http.Response, error) {
 	postman.writer.Reset(&postman.buffer)
+	// TODO: try https://github.com/pquerna/ffjson
 	if err := json.NewEncoder(postman.writer).Encode(dps); err != nil {
 		return nil, err
 	}

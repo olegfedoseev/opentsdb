@@ -76,7 +76,7 @@ func TestIntegrationWithFailedSend(t *testing.T) {
 		err = json.Unmarshal([]byte(body), &data)
 		assert.NoError(t, err)
 
-		// Will fail after 10 successful POSTs
+		// Will fail after 20 successful POSTs
 		if metricsRecived > 20 {
 			w.WriteHeader(http.StatusNotFound)
 		} else {

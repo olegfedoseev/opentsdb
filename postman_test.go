@@ -33,6 +33,23 @@ func TestSendDatapoints(t *testing.T) {
 	assert.NoError(t, postman.Post(dps, ts.URL))
 }
 
+func TestSendWithTimeout(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	dps := DataPoints{
+		&DataPoint{"test1", 123, 1, Tags{"key_z": "val1", "key_a": "val2"}},
+		&DataPoint{"test2", 234, 2, Tags{"type": "test"}},
+	}
+	postman := NewPostman(5 * time.Millisecond)
+	expected := "Post " + ts.URL + ": net/http: request canceled (Client.Timeout exceeded while awaiting headers)"
+	err := postman.Post(dps, ts.URL)
+	assert.EqualError(t, err, expected)
+}
+
 func BenchmarkPost(b *testing.B) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
