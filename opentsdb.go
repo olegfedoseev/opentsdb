@@ -10,7 +10,9 @@ import (
 
 // A Client is an OpenTSDB client. It should be created with NewClient.
 type Client struct {
-	Queue chan *DataPoint
+	Queue  chan *DataPoint
+	Clock  chan *Timer
+	timers chan *Timer
 
 	// Errors is channel for errors from workers, client should drain it
 	Errors chan error
@@ -23,6 +25,14 @@ type Client struct {
 	Sent int64
 
 	url string
+}
+
+// Timer is struct for passing information about "wallclock" duration of POSTing
+// of batch of metrics for given timestamp
+type Timer struct {
+	Timestamp int64
+	Start     time.Time
+	Stop      time.Time
 }
 
 // NewClient will create you a new client for OpenTSDB
@@ -43,6 +53,8 @@ func NewClient(host string, bufferSize int, timeout time.Duration) (*Client, err
 		url:    tsdbURL.String(),
 		Queue:  make(chan *DataPoint, bufferSize),
 		Errors: make(chan error, 10),
+		Clock:  make(chan *Timer, 10),
+		timers: make(chan *Timer, 100),
 	}
 	return c, nil
 }
@@ -53,6 +65,7 @@ func (client *Client) StartWorkers(workers, batchSize int, timeout time.Duration
 	for i := 0; i < workers; i++ {
 		go client.worker(batchSize, timeout)
 	}
+	go client.clock()
 }
 
 // Push will add given dp to internal queue.
@@ -86,27 +99,91 @@ func (client *Client) Send(postman *Postman, batch DataPoints) error {
 	return nil
 }
 
+func (client *Client) clock() {
+	start := make(map[int64]time.Time, 0)
+	stop := make(map[int64]time.Time, 0)
+	var prev int64
+
+	for {
+		select {
+		case timer := <-client.timers:
+			if prev == 0 {
+				prev = timer.Timestamp
+			}
+
+			if timer.Timestamp > prev {
+				t := &Timer{
+					Timestamp: prev,
+					Start:     start[prev],
+					Stop:      stop[prev],
+				}
+				client.Clock <- t
+
+				delete(start, prev)
+				delete(stop, prev)
+				prev = timer.Timestamp
+			}
+
+			if _, ok := start[timer.Timestamp]; !ok {
+				start[timer.Timestamp] = timer.Start
+			}
+			if start[timer.Timestamp].After(timer.Start) {
+				start[timer.Timestamp] = timer.Start
+			}
+			if _, ok := stop[timer.Timestamp]; !ok {
+				stop[timer.Timestamp] = timer.Stop
+			}
+			if stop[timer.Timestamp].Before(timer.Stop) {
+				stop[timer.Timestamp] = timer.Stop
+			}
+		}
+	}
+}
+
 func (client *Client) worker(batchSize int, timeout time.Duration) {
 	buffer := make(DataPoints, 0)
 	queue := make(chan DataPoints, 10)
 	postman := NewPostman(timeout)
 
+	timer := time.NewTimer(timeout)
+	var prev int64
 	for {
 		select {
-		case <-time.After(timeout):
+		case <-timer.C:
 			if len(buffer) > 0 {
 				queue <- buffer
 				buffer = make(DataPoints, 0)
 			}
+			timer.Reset(timeout)
+
 		case dp := <-client.Queue:
+			if dp.Timestamp > prev {
+				queue <- buffer
+				buffer = make(DataPoints, 0)
+				prev = dp.Timestamp
+			}
+
 			buffer = append(buffer, dp)
 			if len(buffer) >= batchSize {
 				queue <- buffer
 				buffer = make(DataPoints, 0)
 			}
+			timer.Reset(timeout)
+
 		case dps := <-queue:
+			if len(dps) == 0 {
+				continue
+			}
+
+			start := time.Now()
 			if err := client.Send(postman, dps); err != nil {
 				client.Errors <- err
+			}
+
+			client.timers <- &Timer{
+				Timestamp: dps[0].Timestamp,
+				Start:     start,
+				Stop:      time.Now(),
 			}
 		}
 	}

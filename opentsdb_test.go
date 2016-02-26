@@ -45,6 +45,7 @@ func TestClientSendWithErrorAndFailedToRequeue(t *testing.T) {
 	ts, host := createTestServerWith404()
 	defer ts.Close()
 
+	// bufferSize is less than len(dps) == 2
 	bufferSize := 1
 	client, err := NewClient(host, bufferSize, 5*time.Second)
 	assert.NoError(t, err)
@@ -53,7 +54,7 @@ func TestClientSendWithErrorAndFailedToRequeue(t *testing.T) {
 	err = client.Send(postman, dps)
 	assert.Error(t, err)
 
-	expected := "request failed: unexpected status 404 (\"Nothing here, move along\") (requeued 1/2)"
+	expected := `request failed: unexpected status 404 ("Nothing here, move along") (requeued 1/2)`
 	assert.EqualError(t, err, expected)
 }
 
@@ -61,6 +62,7 @@ func TestClientSendWithErrorAndAllRequeued(t *testing.T) {
 	ts, host := createTestServerWith404()
 	defer ts.Close()
 
+	// bufferSize is equal to len(dps) == 2
 	bufferSize := 2
 	client, err := NewClient(host, bufferSize, 5*time.Second)
 	assert.NoError(t, err)

@@ -2,7 +2,6 @@ package opentsdb
 
 import (
 	"encoding/json"
-	//	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,7 +14,6 @@ import (
 
 func TestIntegration(t *testing.T) {
 	var metricsRecived int64
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		body, err := gzipBodyReader(r.Body)
@@ -30,33 +28,44 @@ func TestIntegration(t *testing.T) {
 	defer ts.Close()
 	host := strings.Replace(ts.URL, "http://", "", 1)
 
-	batchSize := 2
+	queueSize := 100
 	httpTimeout := time.Second
-	client, err := NewClient(host, batchSize, httpTimeout)
+	client, err := NewClient(host, queueSize, httpTimeout)
 	assert.NoError(t, err)
 
+	batchSize := 2
 	workerTimeout := 20 * time.Millisecond
 	client.StartWorkers(4, batchSize, workerTimeout)
 
 	// Let's push some metrics
 	for i := 0; i < 99; i++ {
+		var ts int64 = 123
+		if i > 60 {
+			ts++
+		}
 		err := client.Push(
-			&DataPoint{"test1", 123 + int64(i), i, Tags{"key_z": "val1"}})
-		time.Sleep(time.Millisecond)
+			&DataPoint{"test1", ts, i, Tags{"key_z": "val1"}})
+		time.Sleep(10 * time.Millisecond)
 		assert.NoError(t, err)
 	}
 	// To be sure that we get into "worker timeout" case and send 99th metric
-	time.Sleep(workerTimeout)
-
-	t.Logf("Queue: %v", len(client.Queue))
-	t.Logf("Dropped: %v", client.Dropped)
-	t.Logf("Sent: %v", client.Sent)
-	t.Logf("Recived: %v", metricsRecived)
+	time.Sleep(2 * workerTimeout)
 
 	select {
 	case err := <-client.Errors:
 		assert.NoError(t, err)
 	default:
+	}
+
+	// TODO: make more robust version
+	select {
+	case timer := <-client.Clock:
+		assert.EqualValues(t, 123, timer.Timestamp)
+		duration := timer.Stop.Sub(timer.Start).Nanoseconds() / 1000 / 1000
+		// we expect it to be 600ms +- 100ms
+		// because we push 60 metrics with 10ms pauses
+		// and http server is very fast
+		assert.InDelta(t, 600, duration, 100)
 	}
 
 	assert.EqualValues(t, 99, client.Sent)
@@ -87,30 +96,31 @@ func TestIntegrationWithFailedSend(t *testing.T) {
 	defer ts.Close()
 	host := strings.Replace(ts.URL, "http://", "", 1)
 
-	batchSize := 2
+	queueSize := 4
 	httpTimeout := time.Second
-	client, err := NewClient(host, batchSize, httpTimeout)
+	client, err := NewClient(host, queueSize, httpTimeout)
 	assert.NoError(t, err)
 
+	batchSize := 2
 	workerTimeout := 20 * time.Millisecond
 	client.StartWorkers(4, batchSize, workerTimeout)
 
 	// Let's push some metrics
 	for i := 0; i < 99; i++ {
 		err = client.Push(
-			&DataPoint{"test1", 123 + int64(i), i, Tags{"key_z": "val1"}})
+			&DataPoint{"test1", 123, i, Tags{"key_z": "val1"}})
 		time.Sleep(time.Millisecond)
 		if err != nil {
 			break
 		}
 	}
 	assert.EqualError(t, err, "failed to push datapoint, queue is full")
-	time.Sleep(workerTimeout)
+	time.Sleep(2 * workerTimeout)
 
-	t.Logf("Queue: %v", len(client.Queue))
-	t.Logf("Dropped: %v", client.Dropped)
-	t.Logf("Sent: %v", client.Sent)
-	t.Logf("Recived: %v", metricsRecived)
+	// t.Logf("Queue: %v", len(client.Queue))
+	// t.Logf("Dropped: %v", client.Dropped)
+	// t.Logf("Sent: %v", client.Sent)
+	// t.Logf("Recived: %v", metricsRecived)
 
 	select {
 	case err = <-client.Errors:
