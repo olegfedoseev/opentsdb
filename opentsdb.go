@@ -24,7 +24,8 @@ type Client struct {
 	// Sent is number of sent metrics by all workers from beginning of time
 	Sent int64
 
-	url string
+	url         string
+	httpTimeout time.Duration
 }
 
 // Timer is struct for passing information about "wallclock" duration of POSTing
@@ -50,11 +51,12 @@ func NewClient(host string, bufferSize int, timeout time.Duration) (*Client, err
 	}
 
 	c := &Client{
-		url:    tsdbURL.String(),
-		Queue:  make(chan *DataPoint, bufferSize),
-		Errors: make(chan error, 10),
-		Clock:  make(chan *Timer, 10),
-		timers: make(chan *Timer, 100),
+		url:         tsdbURL.String(),
+		Queue:       make(chan *DataPoint, bufferSize),
+		Errors:      make(chan error, 10),
+		Clock:       make(chan *Timer, 10),
+		timers:      make(chan *Timer, 100),
+		httpTimeout: timeout,
 	}
 	return c, nil
 }
@@ -143,7 +145,7 @@ func (client *Client) clock() {
 func (client *Client) worker(batchSize int, timeout time.Duration) {
 	buffer := make(DataPoints, 0)
 	queue := make(chan DataPoints, 10)
-	postman := NewPostman(timeout)
+	postman := NewPostman(client.httpTimeout)
 
 	timer := time.NewTimer(timeout)
 	var prev int64
