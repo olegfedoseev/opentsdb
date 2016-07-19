@@ -1,4 +1,4 @@
-package opentsdb
+package writer
 
 import (
 	"fmt"
