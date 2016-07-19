@@ -231,7 +231,7 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string) (opents
 
 	t = time.Now()
 	result := make(opentsdb.DataPoints, 0)
-	for idx, row := range scanRsp {
+	for _, row := range scanRsp {
 		for _, cell := range row.Cells {
 			// isFloat(cell.Qualifier, 0)
 			//value := bytesToIntValue(cell.Value)
@@ -260,23 +260,23 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string) (opents
 			if len(cell.Qualifier) > 4 && len(cell.Qualifier)%2 == 0 {
 				var valIdx int32
 				for i := 0; i < len(cell.Qualifier); i += 2 {
-					qualifier := extractQualifier(cell.Qualifier, int32(i))
+					//qualifier := extractQualifier(cell.Qualifier, int32(i))
 					valLen := int32(getValueLengthFromQualifier(cell.Qualifier, int32(i)))
 					if inMilliseconds(cell.Qualifier[int32(i)]) {
 						i += 2
 						log.Println("inMilliseconds")
 					}
 
-					val := cell.Value[valIdx : valIdx+valLen]
+					//val := cell.Value[valIdx : valIdx+valLen]
 					valIdx += valLen
 
-					log.Printf("qualifier: %#v, idx: %v, len: %v, offset: %v, val: %#v", qualifier, valIdx, valLen, int32(i), val)
+					//log.Printf("qualifier: %#v, idx: %v, len: %v, offset: %v, val: %#v", qualifier, valIdx, valLen, int32(i), val)
 
-					if isFloat(cell.Qualifier, int32(i)) {
-						log.Printf("%d Float!!!! %2.6f", ts, bytesToFloatValue(val))
-					} else {
-						log.Printf("%d else INT!!!! %v", ts, bytesToIntValue(val))
-					}
+					// if isFloat(cell.Qualifier, int32(i)) {
+					// 	log.Printf("%d Float!!!! %2.6f", ts, bytesToFloatValue(val))
+					// } else {
+					// 	log.Printf("%d else INT!!!! %v", ts, bytesToIntValue(val))
+					// }
 				}
 				continue
 			}
@@ -299,9 +299,9 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string) (opents
 			//log.Printf("getValueLengthFromQualifier: %v", getValueLengthFromQualifier(cell.Qualifier, 0))
 
 			// //"script":"Job_Api_Categories__find",
-			// if val, ok := tags["script"]; !ok || val != "Job_Api_Categories__find" {
-			// 	continue
-			// }
+			if val, ok := tags["script"]; !ok || val != "Job_Api_Categories__find" {
+				continue
+			}
 
 			// if val, ok := tags["user"]; !ok || val != "auth" {
 			// 	continue
@@ -323,7 +323,7 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string) (opents
 			// 1421647200 - 1421629200 = 18000
 
 			//cell.
-			fmt.Printf("[%d] %#v\n", idx, dp)
+			//fmt.Printf("[%d] %#v\n", idx, dp)
 			//fmt.Printf("[%d] %v\n", idx, cell.CellType)
 			//log.Printf("cell.Qualifier: %#v", cell.Qualifier)
 
