@@ -2,23 +2,111 @@
 package reader
 
 import (
-	//	"fmt"
+	"fmt"
 	"log"
 	"testing"
 	"time"
+
+	"github.com/Sirupsen/logrus"
+	"github.com/olegfedoseev/opentsdb"
 )
 
 // go test -tags=integration
 
-func TestReadAndCompare(t *testing.T) {
+func TestFindMetrics(t *testing.T) {
 	client := New("db1.kronos.d,db2.kronos.d,db3.kronos.d")
+
+	result, err := client.FindMetrics("php.requests.zarplata.ru.p")
+	if err != nil {
+		log.Fatalf("Failed to get metrics: %v", err)
+	}
+
+	// Expected:
+	// php.requests.zarplata.ru.p25
+	// php.requests.zarplata.ru.p50
+	// php.requests.zarplata.ru.p75
+	// php.requests.zarplata.ru.p95
+	if len(result) != 4 {
+		t.Errorf("Expected 4 metrics, got %v", len(result))
+		for _, metric := range result {
+			fmt.Printf("%s\n", metric)
+		}
+	}
+}
+
+func TestReadAndCompare(t *testing.T) {
+	logrus.SetLevel(logrus.DebugLevel)
+	client := New("db1.kronos.d,db2.kronos.d,db3.kronos.d") //
+
+	// Expected:
+	// http://tsdb.kronos.d:4242/api/query/?start=2014/12/31-02:00:00&end=2014/12/31-05:00:00&m=mimmax:php.requests.realty.ngs.ru.rps{script=General.php,status=200,region=54}&json
+	start, _ := time.Parse("2006/01/02-15:04:05", "2014/12/31-02:00:00")
+	end, _ := time.Parse("2006/01/02-15:04:05", "2014/12/31-05:00:00")
+
+	log.Printf("%v -> %v", start, end)
+
+	tags := opentsdb.Tags{
+		"script": "General.php",
+		"region": "54",
+		"status": "200",
+	}
+
+	dps, err := client.GetDatapoints(start, end, "php.requests.realty.ngs.ru.rps", tags)
+
+	if err != nil {
+		log.Fatalf("Failed to get metrics: %v", err)
+	}
+
+	expected := map[int64]float32{
+		1419969600: 0.30169999599456787,
+		1419970200: 0.23669999837875366,
+		1419970800: 0.20499999821186066,
+		1419971400: 0.29499998688697815,
+		1419972000: 0.1899999976158142,
+		1419972600: 0.22169999778270721,
+		1419973200: 0.21170000731945038,
+		1419973800: 0.19169999659061432,
+		1419974400: 0.17669999599456787,
+		1419975000: 0.19329999387264252,
+		1419975600: 0.17669999599456787,
+		1419976200: 0.21330000460147858,
+		1419976800: 0.17329999804496765,
+		1419977400: 0.1850000023841858,
+		1419978000: 0.1882999986410141,
+		1419978600: 0.19329999387264252,
+		1419979200: 0.20669999718666077,
+		1419979800: 0.18000000715255737,
+		1419980400: 0.19830000400543213,
+	}
+
+	for _, dp := range dps {
+		// 21600 - tz shift
+		log.Printf("%d: %3.2f (%3.2f)", dp.Timestamp, dp.Value, expected[dp.Timestamp-21600])
+		break
+	}
+	log.Printf("Count: %v/%v", len(dps), len(expected))
+}
+
+func TestReadAndCompare2(t *testing.T) {
+	logrus.SetLevel(logrus.DebugLevel)
+	client := New("db1.kronos.d,db2.kronos.d,db3.kronos.d") //
 
 	// Expected:
 	// http://tsdb.kronos.d:4242/api/query/?start=2016/01/21-14:00:00&end=2016/01/21-15:00:00&m=mimmax:php.requests.api.zp.ru.rps{script=Job_Api_Categories__find}&json
-	start, _ := time.Parse("2006/01/02-15:04:05", "2016/01/21-14:00:00")
-	end, _ := time.Parse("2006/01/02-15:04:05", "2016/01/21-15:00:00")
 
-	dps, err := client.GetDatapoints(start, end, "php.requests.api.zp.ru.rps")
+	//http://tsdb.kronos.d:4242/api/query/?start=2016/08/03-13:00:00&end=2016/08/03-15:00:00&m=mimmax:php.requests.realty.ngs.ru.rps{script=General.php,status=200,region=54}&json
+	start, _ := time.Parse("2006/01/02-15:04:05", "2016/08/03-14:00:01")
+	end, _ := time.Parse("2006/01/02-15:04:05", "2016/08/03-16:00:00")
+
+	log.Printf("%v -> %v", start, end)
+
+	tags := opentsdb.Tags{
+		"script": "General.php",
+		"region": "54",
+		"status": "200",
+	}
+
+	dps, err := client.GetDatapoints(start, end, "php.requests.realty.ngs.ru.p95", tags)
 
 	if err != nil {
 		log.Fatalf("Failed to get metrics: %v", err)
@@ -27,6 +115,7 @@ func TestReadAndCompare(t *testing.T) {
 	for _, dp := range dps {
 		// 21600 - tz shift
 		log.Printf("%d: %3.2f (%3.2f)", dp.Timestamp, dp.Value, expected[dp.Timestamp-21600])
+		break
 	}
 	log.Printf("Count: %v/%v", len(dps), len(expected))
 }

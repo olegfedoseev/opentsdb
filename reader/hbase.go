@@ -73,9 +73,9 @@ func (client *Client) FindMetrics(prefix string) ([]string, error) {
 		return nil, err
 	}
 
+	// TODO: maybe map[string][]byte (php.requests.zarplata.ru.p25 -> [0 68 171])
 	result := make([]string, 0)
-	for key, val := range metrics {
-		log.Printf("%v -> %v", key, val)
+	for key, _ := range metrics {
 		result = append(result, key)
 	}
 	sort.Strings(result)
@@ -192,7 +192,7 @@ func (client *Client) getByUID(uidType, uidName []byte) (string, error) {
 	return "", fmt.Errorf("failed to find")
 }
 
-func (client *Client) GetDatapoints(start, end time.Time, metric string) (opentsdb.DataPoints, error) {
+func (client *Client) GetDatapoints(start, end time.Time, metric string, tags opentsdb.Tags) (opentsdb.DataPoints, error) {
 	metrics, err := client.getUID("metrics", metric)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get UID for %s: %v", metric, err)
@@ -206,19 +206,20 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string) (opents
 	prefixStart = append(prefixStart, metrics[metric]...)
 	prefixEnd = append(prefixEnd, metrics[metric]...)
 
-	prefixStart = append(prefixStart, timestampToBytes(int32(start.Unix())-1)...)
-	prefixEnd = append(prefixEnd, timestampToBytes(int32(end.Unix())+1)...)
+	// !!!!! TODO: fix time shift
+	prefixStart = append(prefixStart, timestampToBytes(int32(start.Unix()-7*3600))...)
+	prefixEnd = append(prefixEnd, timestampToBytes(int32(end.Unix()-6*3600))...)
 
-	log.Printf("prefixStart: %d %#v", int32(start.Unix()), prefixStart)
-	log.Printf("prefixEnd: %d %#v", int32(end.Unix()), prefixEnd)
-
-	t := time.Now()
+	ctx, _ := context.WithTimeout(context.Background(), 90*time.Second)
 	scanRequest, err := hrpc.NewScanRange(
-		context.Background(),
+		ctx,
 		[]byte("tsdb"),
 		prefixStart,
 		prefixEnd,
 	)
+	//scanRequest.SetFilter(filter.NewFirstKeyOnlyFilter())
+	//scanRequest.SetFilter(filter.NewInclusiveStopFilter(prefixEnd))
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scan: %v", err)
 	}
@@ -227,57 +228,41 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string) (opents
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan: %v", err)
 	}
-	log.Printf("time: %v", time.Since(t))
 
-	t = time.Now()
 	result := make(opentsdb.DataPoints, 0)
 	for _, row := range scanRsp {
 		for _, cell := range row.Cells {
-			// isFloat(cell.Qualifier, 0)
-			//value := bytesToIntValue(cell.Value)
-			//value := bytesToFloatValue(cell.Value)
-			//flags := getFlagsFromQualifier(qualifier, 0)
-			//val := getOffsetFromQualifier(cell.Qualifier, 0)
-
-			// log.Printf("len(cell.Qualifier): %d: float? %v, int? %v, valLen: %v, len(cell.Value): %v",
-			// 	len(cell.Qualifier), isFloat(cell.Qualifier, 0), isInteger(cell.Qualifier, 0),
-			// 	getValueLengthFromQualifier(cell.Qualifier, 0),
-			// 	len(cell.Value),
-			// )
-
-			tags := make(opentsdb.Tags)
-			tagsRaw := cell.Row[7:]
-			tagCnt := len(tagsRaw) / 6
-			for i := 0; i < tagCnt; i++ {
-				key := client.getTagkByUID(tagsRaw[i*6 : i*6+3])
-				val := client.getTagvByUID(tagsRaw[i*6+3 : i*6+6])
-
-				tags[key] = val
-			}
-
-			ts := int64(bytesToTimestamp(cell.Row[3:7]) + getOffsetFromQualifier(cell.Qualifier, 0))
-
+			// TODO: verify somehow
 			if len(cell.Qualifier) > 4 && len(cell.Qualifier)%2 == 0 {
 				var valIdx int32
 				for i := 0; i < len(cell.Qualifier); i += 2 {
-					//qualifier := extractQualifier(cell.Qualifier, int32(i))
 					valLen := int32(getValueLengthFromQualifier(cell.Qualifier, int32(i)))
 					if inMilliseconds(cell.Qualifier[int32(i)]) {
 						i += 2
-						log.Println("inMilliseconds")
 					}
-
-					//val := cell.Value[valIdx : valIdx+valLen]
 					valIdx += valLen
-
-					//log.Printf("qualifier: %#v, idx: %v, len: %v, offset: %v, val: %#v", qualifier, valIdx, valLen, int32(i), val)
-
-					// if isFloat(cell.Qualifier, int32(i)) {
-					// 	log.Printf("%d Float!!!! %2.6f", ts, bytesToFloatValue(val))
-					// } else {
-					// 	log.Printf("%d else INT!!!! %v", ts, bytesToIntValue(val))
-					// }
 				}
+				fmt.Printf("continue! (%v)\n", cell.Qualifier)
+				continue
+			}
+
+			dpTags := make(opentsdb.Tags)
+			tagsRaw := cell.Row[7:]
+			tagsCnt := len(tagsRaw) / 6
+			for i := 0; i < tagsCnt; i++ {
+				key := client.getTagkByUID(tagsRaw[i*6 : i*6+3])
+				val := client.getTagvByUID(tagsRaw[i*6+3 : i*6+6])
+				dpTags[key] = val
+			}
+
+			skip := false
+			for k, v := range tags {
+				if val, ok := dpTags[k]; !ok || val != v {
+					skip = true
+					break
+				}
+			}
+			if skip {
 				continue
 			}
 
@@ -291,59 +276,15 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string) (opents
 
 			dp := opentsdb.DataPoint{
 				Metric:    client.getMetricByUID(cell.Row[0:3]),
-				Timestamp: ts,
+				Timestamp: int64(bytesToTimestamp(cell.Row[3:7]) + getOffsetFromQualifier(cell.Qualifier, 0)),
 				Value:     val,
-				Tags:      tags,
+				Tags:      dpTags,
 			}
 
-			//log.Printf("getValueLengthFromQualifier: %v", getValueLengthFromQualifier(cell.Qualifier, 0))
-
-			// //"script":"Job_Api_Categories__find",
-			if val, ok := tags["script"]; !ok || val != "Job_Api_Categories__find" {
-				continue
-			}
-
-			// if val, ok := tags["user"]; !ok || val != "auth" {
-			// 	continue
-			// }
-
-			// // if val, ok := tags["is_ajax"]; !ok || val != "no" {
-			// // 	continue
-			// // }
-
-			// if val, ok := tags["status"]; !ok || val != "200" {
-			// 	continue
-			// }
-
-			// if val, ok := tags["region"]; !ok || val != "54" {
-			// 	continue
-			// }
 			result = append(result, &dp)
-
-			// 1421647200 - 1421629200 = 18000
-
-			//cell.
-			//fmt.Printf("[%d] %#v\n", idx, dp)
-			//fmt.Printf("[%d] %v\n", idx, cell.CellType)
-			//log.Printf("cell.Qualifier: %#v", cell.Qualifier)
-
-			// if isInteger(cell.Qualifier, 0) {
-			// 	log.Printf("%d INT!!!! %v", int64(bytesToTimestamp(cell.Row[3:7])), bytesToIntValue(cell.Value[0:valLen]))
-			// } else {
-			// 	log.Printf("%d else Float!!!! %2.6f", int64(bytesToTimestamp(cell.Row[3:7])), bytesToFloatValue(cell.Value[0:valLen]))
-			// }
-
-			// if isFloat(cell.Qualifier, 0) {
-			// 	log.Printf("%d Float!!!! %2.6f", int64(bytesToTimestamp(cell.Row[3:7])), bytesToFloatValue(cell.Value[0:valLen]))
-			// } else {
-			// 	log.Printf("%d else INT!!!! %v", int64(bytesToTimestamp(cell.Row[3:7])), bytesToIntValue(cell.Value[0:valLen]))
-			// }
+			fmt.Printf("(%v) %v %v %v\n", time.Unix(dp.Timestamp, 0), dp.Timestamp, dp.Value, dp.Tags)
 		}
-		// if idx > 10 {
-		// 	break
-		// }
 	}
-	log.Printf("range: %v", time.Since(t))
 	return result, nil
 }
 
