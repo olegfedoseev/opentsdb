@@ -192,7 +192,7 @@ func (client *Client) getByUID(uidType, uidName []byte) (string, error) {
 	return "", fmt.Errorf("failed to find")
 }
 
-func (client *Client) GetDatapoints(start, end time.Time, metric string, tags opentsdb.Tags) (opentsdb.DataPoints, error) {
+func (client *Client) GetDatapoints(start, end int32, metric string, tags opentsdb.Tags) (opentsdb.DataPoints, error) {
 	metrics, err := client.getUID("metrics", metric)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get UID for %s: %v", metric, err)
@@ -206,9 +206,10 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string, tags op
 	prefixStart = append(prefixStart, metrics[metric]...)
 	prefixEnd = append(prefixEnd, metrics[metric]...)
 
-	// !!!!! TODO: fix time shift
-	prefixStart = append(prefixStart, timestampToBytes(int32(start.Unix()-7*3600))...)
-	prefixEnd = append(prefixEnd, timestampToBytes(int32(end.Unix()-6*3600))...)
+	// round down to nearest hour
+	prefixStart = append(prefixStart, timestampToBytes(start-start%3600)...)
+	// round up to next hour
+	prefixEnd = append(prefixEnd, timestampToBytes(end-end%3600+3601)...)
 
 	ctx, _ := context.WithTimeout(context.Background(), 90*time.Second)
 	scanRequest, err := hrpc.NewScanRange(
@@ -217,8 +218,6 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string, tags op
 		prefixStart,
 		prefixEnd,
 	)
-	//scanRequest.SetFilter(filter.NewFirstKeyOnlyFilter())
-	//scanRequest.SetFilter(filter.NewInclusiveStopFilter(prefixEnd))
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scan: %v", err)
@@ -274,15 +273,18 @@ func (client *Client) GetDatapoints(start, end time.Time, metric string, tags op
 				val = float32(bytesToIntValue(cell.Value[0:valLen]))
 			}
 
+			ts := bytesToTimestamp(cell.Row[3:7]) + getOffsetFromQualifier(cell.Qualifier, 0)
+			if ts > end || ts < start {
+				continue
+			}
+
 			dp := opentsdb.DataPoint{
 				Metric:    client.getMetricByUID(cell.Row[0:3]),
-				Timestamp: int64(bytesToTimestamp(cell.Row[3:7]) + getOffsetFromQualifier(cell.Qualifier, 0)),
+				Timestamp: int64(ts),
 				Value:     val,
 				Tags:      dpTags,
 			}
-
 			result = append(result, &dp)
-			fmt.Printf("(%v) %v %v %v\n", time.Unix(dp.Timestamp, 0), dp.Timestamp, dp.Value, dp.Tags)
 		}
 	}
 	return result, nil
@@ -369,7 +371,6 @@ func getFlagsFromQualifier(qualifier []byte, offset int32) byte {
  * @since 2.1
  */
 func isFloat(qualifier []byte, offset int32) bool {
-	//log.Printf("getFlagsFromQualifier(qualifier, offset)&FLAG_FLOAT: %#v, %v", qualifier, getFlagsFromQualifier(qualifier, offset)&FLAG_FLOAT)
 	return getFlagsFromQualifier(qualifier, offset)&FLAG_FLOAT != 0x00
 }
 
@@ -392,7 +393,6 @@ func bytesToFloatValue(value []byte) float32 {
 }
 
 func bytesToIntValue(value []byte) int32 {
-	//buf := bytes.NewBuffer(value)
 	switch len(value) {
 	case 4:
 		return int32(binary.BigEndian.Uint32(value))
@@ -400,13 +400,6 @@ func bytesToIntValue(value []byte) int32 {
 		return int32(binary.BigEndian.Uint16(value))
 	}
 	return 0
-	// var result int32
-	// //log.Printf("int value %d %#v: %v", len(value), value, int32(binary.BigEndian.Uint32(value)))
-	// if err := binary.Read(buf, binary.BigEndian, &result); err != nil {
-	// 	log.Printf("Failer to read int value %#v: %v", value, err)
-	// 	return 0
-	// }
-	// return result
 }
 
 /**
@@ -529,159 +522,3 @@ func getQualifierLength(qualifier []byte, offset int32) uint16 {
 func inMilliseconds(qualifier byte) bool {
 	return (qualifier & MS_BYTE_FLAG) == MS_BYTE_FLAG
 }
-
-/**
-* Returns whether or not this is a floating value that needs to be fixed.
-* <p>
-* OpenTSDB used to encode all floating point values as `float' (4 bytes)
-* but actually store them on 8 bytes, with 4 leading 0 bytes, and flags
-* correctly stating the value was on 4 bytes.
-* (from CompactionQueue)
-* @param flags The least significant byte of a qualifier.
-* @param value The value that may need to be corrected.
- */
-func floatingPointValueToFix(flags byte, value []byte) bool {
-	// We need a floating point value. That pretends to be on 4 bytes. But is actually using 8 bytes.
-	return (flags&FLAG_FLOAT) != 0 && (flags&LENGTH_MASK) == 0x3 && len(value) == 8
-}
-
-/**
-* Returns a corrected value if this is a floating point value to fix.
-* <p>
-* OpenTSDB used to encode all floating point values as `float' (4 bytes)
-* but actually store them on 8 bytes, with 4 leading 0 bytes, and flags
-* correctly stating the value was on 4 bytes.
-* <p>
-* This function detects such values and returns a corrected value, without
-* the 4 leading zeros.  Otherwise it returns the value unchanged.
-* (from CompactionQueue)
-* @param flags The least significant byte of a qualifier.
-* @param value The value that may need to be corrected.
-* @throws IllegalDataException if the value is malformed.
- */
-func fixFloatingPointValue(flags byte, value []byte) []byte {
-	if !floatingPointValueToFix(flags, value) {
-		return value
-	}
-
-	// The first 4 bytes should really be zeros.
-	if value[0] == 0 && value[1] == 0 && value[2] == 0 && value[3] == 0 {
-		// Just keep the last 4 bytes.
-		return value[4:8]
-	}
-
-	// Very unlikely.
-	return []byte{}
-	// throw new IllegalDataException("Corrupted floating point value: "
-	// 			+ Arrays.toString(value) + " flags=0x" + Integer.toHexString(flags)
-	// 			+ " -- first 4 bytes are expected to be zeros.")
-}
-
-/**
-* Fix the flags inside the last byte of a qualifier.
-* <p>
-* OpenTSDB used to not rely on the size recorded in the flags being
-* correct, and so for a long time it was setting the wrong size for
-* floating point values (pretending they were encoded on 8 bytes when
-* in fact they were on 4).  So overwrite these bits here to make sure
-* they're correct now, because once they're compacted it's going to
-* be quite hard to tell if the flags are right or wrong, and we need
-* them to be correct to easily decode the values.
-* @param flags The least significant byte of a qualifier.
-* @param val_len The number of bytes in the value of this qualifier.
-* @return The least significant byte of the qualifier with correct flags.
- */
-func fixQualifierFlags(flags byte, val_len int32) byte {
-	// Explanation:
-	//   (1) Take the last byte of the qualifier.
-	//   (2) Zero out all the flag bits but one.
-	//       The one we keep is the type (floating point vs integer value).
-	//   (3) Set the length properly based on the value we have.
-	return 0 //(byte) ((flags & ~(FLAGS_MASK >>> 1)) | (val_len - 1))
-	//              ^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^    ^^^^^^^^^^^^^
-	//               (1)               (2)                    (3)
-}
-
-/**
-* Breaks down all the values in a row into individual {@link Cell}s sorted on
-* the qualifier. Columns with non data-point data will be discarded.
-* <b>Note:</b> This method does not account for duplicate timestamps in
-* qualifiers.
-* @param row An array of data row columns to parse
-* @param estimated_nvalues Estimate of the number of values to compact.
-* Used to pre-allocate a collection of the right size, so it's better to
-* overshoot a bit to avoid re-allocations.
-* @return An array list of data point {@link Cell} objects. The list may be
-* empty if the row did not contain a data point.
-* @throws IllegalDataException if one of the cells cannot be read because
-* it's corrupted or in a format we don't understand.
-* @since 2.0
- */
-// func extractDataPoints(ArrayList<KeyValue> row, int estimated_nvalues) DataPoints {
-// 	//ArrayList<Cell> cells = new ArrayList<Cell>(estimated_nvalues);
-// 	//for (KeyValue kv : row) {
-//   		var qual []byte = kv.qualifier()
-//   		var qualLen int32 = len(qual)
-//   		var val []byte = kv.value()
-
-//   		if qualLen % 2 != 0 {
-//   			// skip a non data point column
-//   			continue
-
-//   		} else if qualLen == 2 {  // Single-value cell.
-//   			// Maybe we need to fix the flags in the qualifier.
-//   			var actual_val []byte = fixFloatingPointValue(qual[1], val)
-//   			var q byte = fixQualifierFlags(qual[1], len(actual_val))
-
-//   			var actual_qual []byte = qual
-//     		if q != qual[1] {  // We need to fix the qualifier.
-//       			actual_qual = []byte{qual[0], q}  // So make a copy.
-//     		}
-
-//     		// Cell cell = new Cell(actual_qual, actual_val);
-//     		// cells.add(cell);
-//     		continue
-
-//   		} else if (qualLen == 4 && inMilliseconds(qual[0])) {
-//     		// since ms support is new, there's nothing to fix
-//     		//Cell cell = new Cell(qual, val);
-//     		//cells.add(cell);
-//     		continue
-//   		}
-
-// 	  	// Now break it down into Cells.
-// 	  	int val_idx = 0;
-// 	  	//try {
-// 	    	for (int i = 0; i < qualLen; i += 2) {
-// 	      		var q []byte = extractQualifier(qual, i)
-// 	      		var vlen int32  = getValueLengthFromQualifier(qual, i)
-// 	      		if inMilliseconds(qual[i]) {
-// 	        		i += 2
-// 	      		}
-
-// 	      		//var v []byte = new byte[vlen]
-// 	      		//System.arraycopy(val, val_idx, v, 0, vlen);
-// 	      		val_idx += vlen
-// 	      		//Cell cell = new Cell(q, v);
-// 	      		//cells.add(cell);
-// 	    	}
-// 	  	// } catch (ArrayIndexOutOfBoundsException e) {
-// 	   //  	throw new IllegalDataException("Corrupted value: couldn't break down"
-// 		  //       + " into individual values (consumed " + val_idx + " bytes, but was"
-// 		  //       + " expecting to consume " + (val.length - 1) + "): " + kv
-// 		  //       + ", cells so far: " + cells);
-// 	  	// }
-
-// 	  	// Check we consumed all the bytes of the value.  Remember the last byte
-// 	  	// is metadata, so it's normal that we didn't consume it.
-// 	  	if (val_idx != val.length - 1) {
-// 	    	// throw new IllegalDataException("Corrupted value: couldn't break down"
-// 		    //   + " into individual values (consumed " + val_idx + " bytes, but was"
-// 	    	//   + " expecting to consume " + (val.length - 1) + "): " + kv
-// 	     //  	+ ", cells so far: " + cells);
-// 	  	}
-// 	//}
-
-// //	Collections.sort(cells);
-// 	return cells
-// }
