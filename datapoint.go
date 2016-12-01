@@ -2,7 +2,9 @@ package opentsdb
 
 import (
 	"bytes"
+	"fmt"
 	"sort"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -16,9 +18,21 @@ type DataPoint struct {
 	Tags      Tags        `json:"tags"`
 }
 
+// sys.cpu.user host=webserver01,cpu=1  1356998400  0
+// <metric> <timestamp> <value> <tagk=tagv> [<tagkN=tagvN>]
+func (dp DataPoint) String() string {
+	tags := strings.Trim(dp.Tags.String(), "{}")
+	return fmt.Sprintf("%s %d %3.6f %s",
+		dp.Metric, dp.Timestamp, dp.Value, strings.Replace(tags, ",", " ", -1))
+}
+
 // DataPoints holds multiple DataPoints:
 // http://opentsdb.net/docs/build/html/api_http/put.html#example-multiple-data-point-put.
 type DataPoints []*DataPoint
+
+func (dps DataPoints) Len() int           { return len(dps) }
+func (dps DataPoints) Swap(i, j int)      { dps[i], dps[j] = dps[j], dps[i] }
+func (dps DataPoints) Less(i, j int) bool { return dps[i].Timestamp < dps[j].Timestamp }
 
 // Tags is a helper class for tags.
 type Tags map[string]string
